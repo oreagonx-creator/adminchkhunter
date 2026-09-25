@@ -183,7 +183,7 @@
       <table>
         <thead>
           <tr>
-            <th>SAP ID</th><th>ชื่อ</th><th>CP</th><th>ครั้งที่</th><th>สุ่มพิกัด</th><th>เครดิต</th><th>สถานะ</th>
+            <th>SAP ID</th><th>ชื่อ</th><th>สถานะ</th><th>ครั้งที่</th><th>CP</th><th>เครดิต</th><th>สุ่มพิกัด</th>
             <th>วันที่</th><th>เริ่ม</th><th>สิ้นสุด</th><th>ใช้เวลา</th><th>แคปชั่น</th>
           </tr>
         </thead>
@@ -727,11 +727,12 @@
   const STATUS_LABEL = { playing: "กำลังเล่น", success: "ผ่านภารกิจ", failed: "หมดเวลา" };
 
   function renderSummary() {
-    const total = allPlayers.length;
-    const success = allPlayers.filter(p => p.status === "success").length;
-    const failed = allPlayers.filter(p => p.status === "failed").length;
-    const playing = allPlayers.filter(p => p.status === "playing").length;
-    const totalCredits = allPlayers.reduce((sum, p) => sum + (p.creditsToday || 0), 0);
+    const filtered = getFilteredPlayers();
+    const total = filtered.length;
+    const success = filtered.filter(p => p.status === "success").length;
+    const failed = filtered.filter(p => p.status === "failed").length;
+    const playing = filtered.filter(p => p.status === "playing").length;
+    const totalCredits = filtered.reduce((sum, p) => sum + (p.creditsToday || 0), 0);
 
     document.getElementById("summaryRow").innerHTML = `
       <div class="summary-chip"><div class="num">${total}</div><div class="lbl">ทั้งหมด</div></div>
@@ -782,11 +783,11 @@
       <tr>
         <td>${p.playerId}</td>
         <td>${p.name}</td>
-        <td>${p.score}/5</td>
-        <td>${p.attemptCount}/2</td>
-        <td>${p.rerollCount || 0}</td>
-        <td>${p.creditsToday}</td>
         <td><span class="status-pill status-${p.status}">${STATUS_LABEL[p.status] || p.status}</span></td>
+        <td>${p.attemptCount}/2</td>
+        <td>${p.score}/5</td>
+        <td>${p.creditsToday}</td>
+        <td>${p.rerollCount || 0}</td>
         <td>${formatDateSafe(p.date, p.startTime)}</td>
         <td>${formatTime(p.startTime)}</td>
         <td>${formatTime(p.finishTime)}</td>
@@ -796,13 +797,18 @@
     `).join("");
   }
 
-  document.getElementById("statusFilter").addEventListener("change", renderTable);
-  document.getElementById("sortSelect").addEventListener("change", renderTable);
-  document.getElementById("searchInput").addEventListener("input", renderTable);
-  document.getElementById("dateFilter").addEventListener("change", renderTable);
+  function refreshView() {
+    renderSummary();
+    renderTable();
+  }
+
+  document.getElementById("statusFilter").addEventListener("change", refreshView);
+  document.getElementById("sortSelect").addEventListener("change", refreshView);
+  document.getElementById("searchInput").addEventListener("input", refreshView);
+  document.getElementById("dateFilter").addEventListener("change", refreshView);
   document.getElementById("clearDateBtn").addEventListener("click", () => {
     document.getElementById("dateFilter").value = "";
-    renderTable();
+    refreshView();
   });
   document.getElementById("refreshBtn").addEventListener("click", loadPlayers);
 
