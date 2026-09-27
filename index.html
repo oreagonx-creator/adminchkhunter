@@ -837,30 +837,81 @@
     return d >= monday && d <= sunday;
   }
 
+  // ---------- ดึง "ชื่อ" กลาง จากแท็บ "ID" ในชีตเดียวกับระบบเกม ผ่าน backend โดยตรง (action: listEmployeeNames)
+  //            ใช้ JSONP channel เดียวกับ listPlayers เพื่อเลี่ยงปัญหา CORS ที่เกิดตอนยิง fetch()
+  //            ไปที่ docs.google.com ตรงๆ จากฝั่ง browser (ต้อง deploy Code.gs เวอร์ชันที่มี action นี้ก่อน) ----------
+  let lastNameLookupError = null;
+
+  function fetchNameLookupMap() {
+    lastNameLookupError = null;
+    return new Promise((resolve) => {
+      const cbName = "jsonp_names_" + Math.random().toString(36).slice(2);
+      const script = document.createElement("script");
+      const timeoutId = setTimeout(() => {
+        lastNameLookupError = "หมดเวลารอการตอบกลับจาก Apps Script (15 วินาที)";
+        delete window[cbName]; script.remove();
+        resolve(new Map());
+      }, 15000);
+
+      window[cbName] = (data) => {
+        clearTimeout(timeoutId);
+        delete window[cbName]; script.remove();
+        const map = new Map();
+        if (!data.success) {
+          lastNameLookupError = data.error || "ไม่ทราบสาเหตุ";
+          resolve(map);
+          return;
+        }
+        Object.keys(data.names || {}).forEach(id => map.set(String(id), data.names[id]));
+        resolve(map);
+      };
+      script.onerror = () => {
+        clearTimeout(timeoutId);
+        lastNameLookupError = "เชื่อมต่อ Apps Script ไม่สำเร็จ (ตรวจสอบว่า deploy เวอร์ชันล่าสุดที่มี action listEmployeeNames แล้ว)";
+        delete window[cbName]; script.remove();
+        resolve(new Map());
+      };
+      script.src = `${API_URL}?action=listEmployeeNames&adminCode=${ADMIN_CODE}&callback=${cbName}`;
+      document.body.appendChild(script);
+    });
+  }
+
+  function toFileDateStr(dateObj) {
+    // รูปแบบสั้น วัน-เดือน-ปี (ปี พ.ศ. 2 หลัก) เช่น 14/09/69 -> "140969" ตัด "/" ออกเพราะใช้ในชื่อไฟล์ไม่ได้
+    const label = dateObj.toLocaleDateString("th-TH", { day: "2-digit", month: "2-digit", year: "2-digit" });
+    return label.replace(/\//g, "");
+  }
+
   // ---------- รวมเครดิตต่อคนจากรายการ player rows ที่กรองมาแล้ว ----------
-  function aggregateCreditsByPerson(playerRows) {
+  function aggregateCreditsByPerson(playerRows, nameMap) {
     const personMap = new Map();
     playerRows.forEach(p => {
       if (!personMap.has(p.playerId)) personMap.set(p.playerId, { name: p.name, credits: 0 });
       const e = personMap.get(p.playerId);
-      e.name = p.name; // ใช้ชื่อล่าสุดที่เจอ
+      e.name = p.name; // ใช้ชื่อล่าสุดที่เจอ (ใช้เป็น fallback ถ้าไม่พบใน nameMap)
       e.credits += (p.creditsToday || 0);
     });
     const sortedIds = [...personMap.keys()].sort((a, b) =>
       String(a).localeCompare(String(b), undefined, { numeric: true })
     );
-    return sortedIds.map(id => ({ id, name: personMap.get(id).name, credits: personMap.get(id).credits }));
+    return sortedIds.map(id => ({
+      id,
+      name: (nameMap && nameMap.get(String(id))) || personMap.get(id).name,
+      credits: personMap.get(id).credits
+    }));
   }
 
-  // ---------- Sheet 1: เครดิตของสัปดาห์ที่ผ่านมาล่าสุด (จ-อา เดียว) ----------
+  // ---------- Sheet 1: เครดิตของสัปดาห์ที่ผ่านมาล่าสุด (จ-อา เดียว) — เฉพาะคนที่มีเครดิต > 0 ----------
   // ถ้าสัปดาห์นี้ยังไม่จบ (ยังไม่ถึงวันอาทิตย์) จะไม่แสดงสัปดาห์ปัจจุบัน แต่แสดงสัปดาห์ก่อนหน้าแทนเสมอ
-  function buildLastWeekSheet() {
+  function buildLastWeekSheet(nameMap) {
     const { monday, sunday } = getLastCompletedWeekRange();
     const rangeLabel = `${formatDate(monday)} - ${formatDate(sunday)}`;
     const relevant = allPlayers.filter(p => p.date && isDateInRange(p.date, monday, sunday));
     if (!relevant.length) return null;
 
-    const summary = aggregateCreditsByPerson(relevant);
+    const summary = aggregateCreditsByPerson(relevant, nameMap).filter(s => s.credits > 0);
+    if (!summary.length) return null;
+
     return summary.map(s => ({
       "สัปดาห์ (จ-อา)": rangeLabel,
       "SAP ID": s.id,
@@ -869,54 +920,80 @@
     }));
   }
 
-  // ---------- Sheet 2: เครดิตรวมทั้งหมด (ทุกวันที่มีข้อมูล) ----------
-  function buildTotalCreditsSheet() {
-    const relevant = allPlayers.filter(p => p.date);
-    if (!relevant.length) return null;
+  // ---------- ดึงรายชื่อผู้เล่นสำหรับ export sheet "รายงานผล" — บังคับช่วงเวลาเป็นสัปดาห์ (จ-อา)
+  //            เดียวกับ sheet "เครดิตรายสัปดาห์" เสมอ (ไม่พึ่งช่องเลือกวันที่บนหน้าจอ) ส่วน
+  //            ตัวกรองสถานะ/คำค้นหาบนหน้าจอยังใช้แคบผลลัพธ์ต่อได้ตามปกติ ----------
+  function getWeeklyReportPlayers() {
+    const { monday, sunday } = getLastCompletedWeekRange();
+    const filter = document.getElementById("statusFilter").value;
+    const keyword = document.getElementById("searchInput").value.trim().toLowerCase();
+    const sortBy = document.getElementById("sortSelect").value;
 
-    const summary = aggregateCreditsByPerson(relevant);
-    return summary.map(s => ({
-      "SAP ID": s.id,
-      "ชื่อ": s.name,
-      "เครดิตรวมทั้งหมด": s.credits
-    }));
+    let list = allPlayers.filter(p => p.date && isDateInRange(p.date, monday, sunday));
+    if (filter !== "all") list = list.filter(p => p.status === filter);
+    if (keyword) {
+      list = list.filter(p =>
+        String(p.playerId).toLowerCase().includes(keyword) ||
+        String(p.name).toLowerCase().includes(keyword)
+      );
+    }
+    list = list.slice().sort((a, b) => {
+      if (sortBy === "date_desc") return b.startTime - a.startTime;
+      if (sortBy === "date_asc") return a.startTime - b.startTime;
+      if (sortBy === "id_asc") return String(a.playerId).localeCompare(String(b.playerId), undefined, { numeric: true });
+      if (sortBy === "id_desc") return String(b.playerId).localeCompare(String(a.playerId), undefined, { numeric: true });
+      return 0;
+    });
+    return { list, monday, sunday };
   }
 
-  document.getElementById("exportBtn").addEventListener("click", () => {
-    const players = getFilteredPlayers();
-    const rows = players.map(p => ({
-      "SAP ID": p.playerId,
-      "ชื่อ": p.name,
-      "CP": `${p.score}/5`,
-      "ครั้งที่": `${p.attemptCount}/2`,
-      "สุ่มพิกัด": p.rerollCount || 0,
-      "เครดิต": p.creditsToday,
-      "สถานะ": STATUS_LABEL[p.status] || p.status,
-      "วันที่": formatDateSafe(p.date, p.startTime),
-      "เริ่ม": formatTime(p.startTime),
-      "สิ้นสุด": formatTime(p.finishTime),
-      "ใช้เวลา": formatDuration(p.durationMs),
-      "แคปชั่น": p.caption || ""
-    }));
+  document.getElementById("exportBtn").addEventListener("click", async () => {
+    const exportBtn = document.getElementById("exportBtn");
+    const originalLabel = exportBtn.textContent;
+    exportBtn.disabled = true;
+    exportBtn.textContent = "⏳ กำลังเตรียมไฟล์...";
 
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet(rows);
-    XLSX.utils.book_append_sheet(wb, ws, "รายงานผล");
+    try {
+      const nameMap = await fetchNameLookupMap();
+      const { list: weeklyPlayers, monday, sunday } = getWeeklyReportPlayers();
 
-    const lastWeekRows = buildLastWeekSheet();
-    if (lastWeekRows && lastWeekRows.length) {
-      const lastWeekWs = XLSX.utils.json_to_sheet(lastWeekRows);
-      XLSX.utils.book_append_sheet(wb, lastWeekWs, "เครดิตรายสัปดาห์");
+      const rows = weeklyPlayers.map(p => ({
+        "SAP ID": p.playerId,
+        "ชื่อ": nameMap.get(String(p.playerId)) || p.name,
+        "CP": `${p.score}/5`,
+        "ครั้งที่": `${p.attemptCount}/2`,
+        "สุ่มพิกัด": p.rerollCount || 0,
+        "เครดิต": p.creditsToday,
+        "สถานะ": STATUS_LABEL[p.status] || p.status,
+        "วันที่": formatDateSafe(p.date, p.startTime),
+        "เริ่ม": formatTime(p.startTime),
+        "สิ้นสุด": formatTime(p.finishTime),
+        "ใช้เวลา": formatDuration(p.durationMs),
+        "แคปชั่น": p.caption || ""
+      }));
+
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(rows);
+      XLSX.utils.book_append_sheet(wb, ws, "รายงานผล");
+
+      const lastWeekRows = buildLastWeekSheet(nameMap);
+      if (lastWeekRows && lastWeekRows.length) {
+        const lastWeekWs = XLSX.utils.json_to_sheet(lastWeekRows);
+        XLSX.utils.book_append_sheet(wb, lastWeekWs, "เครดิตรายสัปดาห์");
+      }
+
+      const fileDateRange = `${toFileDateStr(monday)}-${toFileDateStr(sunday)}`;
+      XLSX.writeFile(wb, `checkpointhunter-${fileDateRange}.xlsx`);
+
+      if (nameMap.size === 0) {
+        alert("Export สำเร็จ แต่โหลดฐานข้อมูลชื่อกลางไม่สำเร็จ — ใช้ชื่อที่บันทึกไว้ในระบบนี้แทนไปก่อน\n\nสาเหตุ: " + (lastNameLookupError || "ไม่ทราบสาเหตุ (ไม่พบข้อมูลใดๆ ในชีต)"));
+      }
+    } catch (e) {
+      alert("Export ไม่สำเร็จ: " + e.message);
+    } finally {
+      exportBtn.disabled = false;
+      exportBtn.textContent = originalLabel;
     }
-
-    const totalRows = buildTotalCreditsSheet();
-    if (totalRows && totalRows.length) {
-      const totalWs = XLSX.utils.json_to_sheet(totalRows);
-      XLSX.utils.book_append_sheet(wb, totalWs, "เครดิตรวมทั้งหมด");
-    }
-
-    const today = new Date().toISOString().slice(0, 10);
-    XLSX.writeFile(wb, `checkpoint-mission-report-${today}.xlsx`);
   });
 </script>
 </body>
