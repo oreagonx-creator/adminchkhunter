@@ -813,6 +813,14 @@
   document.getElementById("refreshBtn").addEventListener("click", loadPlayers);
 
   // ---------- หา "วันจันทร์" ของสัปดาห์นั้น (Date object เที่ยงคืน) ----------
+  // ---------- คืนค่า "วันนี้" ตามเวลาไทยจริง (Asia/Bangkok) ไม่ใช่ UTC ----------
+  // ก่อนหน้านี้ใช้ new Date().toISOString().slice(0,10) ซึ่งอิง UTC ทำให้วันเปลี่ยนตอน 07:00 น.
+  // เวลาไทย (เที่ยงคืน UTC) แทนที่จะเป็นเที่ยงคืนเวลาไทยจริง ไม่ตรงกับฝั่งเกมที่ใช้ Etc/GMT-7
+  // sv-SE locale คืนรูปแบบ "yyyy-mm-dd" ให้ตรงๆ โดยไม่ต้องแปลงเอง
+  function getTodayDateStrThai() {
+    return new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Bangkok" });
+  }
+
   function getMondayOfWeek(dateStr) {
     const d = new Date(dateStr + "T00:00:00");
     const day = d.getDay(); // 0=อาทิตย์ 1=จันทร์ ... 6=เสาร์
@@ -824,7 +832,7 @@
   // ---------- หาช่วง "สัปดาห์ที่ผ่านมาล่าสุดแบบครบสมบูรณ์" (จ-อา) เทียบกับวันนี้ ----------
   // สัปดาห์ปัจจุบันที่ยังไม่จบ (ยังไม่ถึงวันอาทิตย์) จะไม่ถูกนับ เอาแค่สัปดาห์ก่อนหน้าที่จบไปแล้วเท่านั้น
   function getLastCompletedWeekRange() {
-    const thisMonday = getMondayOfWeek(new Date().toISOString().slice(0, 10));
+    const thisMonday = getMondayOfWeek(getTodayDateStrThai());
     const lastMonday = new Date(thisMonday);
     lastMonday.setDate(lastMonday.getDate() - 7);
     const lastSunday = new Date(lastMonday);
