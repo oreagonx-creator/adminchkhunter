@@ -90,6 +90,32 @@
   .status-playing{ background:var(--teal-dim); color:var(--teal); }
   .status-success{ background:#D9F2E4; color:var(--green); }
   .status-failed{ background:#FBE1DD; color:var(--red); }
+
+  /* ---- หน้าต่างเลือกช่วง Export ---- */
+  .modal-backdrop{
+    position:fixed; inset:0; z-index:50; background:rgba(34,52,73,.5);
+    display:flex; align-items:center; justify-content:center; padding:18px;
+  }
+  .modal-card{
+    width:100%; max-width:380px; background:var(--card); border-radius:20px; padding:20px;
+    box-shadow:0 12px 40px rgba(34,52,73,.3);
+  }
+  .modal-title{ font-size:17px; font-weight:800; margin-bottom:14px; }
+  .opt{
+    display:block; border:2px solid var(--card-line); border-radius:14px; padding:12px 14px;
+    margin-bottom:10px; cursor:pointer; background:#fff;
+  }
+  .opt.selected{ border-color:var(--teal); background:var(--teal-dim); }
+  .opt-head{ display:flex; align-items:center; gap:10px; font-size:14.5px; font-weight:700; margin:0; color:var(--ink); }
+  .opt-head input[type="radio"]{ width:auto; margin:0; padding:0; accent-color:var(--teal); }
+  .opt-sub{ font-size:12.5px; color:var(--ink-dim); margin:4px 0 0 28px; font-weight:500; }
+  .opt-fields{ display:flex; gap:8px; align-items:center; margin:10px 0 0 28px; }
+  .opt-fields input[type="date"]{ flex:1; min-width:0; margin:0; padding:9px 8px; font-size:14px; }
+  .opt-fields span{ color:var(--ink-dim); font-size:13px; }
+  .modal-hint{ font-size:12.5px; font-weight:700; margin:2px 0 14px; min-height:18px; color:var(--teal); }
+  .modal-actions{ display:flex; gap:10px; }
+  .modal-actions button{ flex:1; padding:12px; font-size:15px; margin:0; }
+  .btn-cancel{ background:#EEF1F5; color:var(--ink-dim); }
 </style>
 </head>
 <body>
@@ -189,6 +215,33 @@
         </thead>
         <tbody id="tableBody"></tbody>
       </table>
+    </div>
+  </div>
+</div>
+
+<!-- หน้าต่างเลือกช่วง Export (เปิดเมื่อกดปุ่ม Export) -->
+<div id="exportModal" class="modal-backdrop hidden">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="exportModalTitle">
+    <div class="modal-title" id="exportModalTitle">📥 Export รายงาน</div>
+
+    <label class="opt selected" id="optWeek">
+      <div class="opt-head"><input type="radio" name="exportMode" value="week" checked> รายสัปดาห์ (จ-อา)</div>
+      <div class="opt-sub" id="weekRangeText"></div>
+    </label>
+
+    <label class="opt" id="optCustom">
+      <div class="opt-head"><input type="radio" name="exportMode" value="custom"> เลือกช่วงวันที่เอง</div>
+      <div class="opt-fields hidden" id="exportCustomFields">
+        <input id="exportStart" type="date">
+        <span>ถึง</span>
+        <input id="exportEnd" type="date">
+      </div>
+    </label>
+
+    <div class="modal-hint" id="exportRangeHint"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-cancel" id="exportCancelBtn">ยกเลิก</button>
+      <button type="button" class="btn-primary" id="exportConfirmBtn">📥 Export</button>
     </div>
   </div>
 </div>
@@ -909,19 +962,84 @@
     }));
   }
 
-  // ---------- Sheet 1: เครดิตของสัปดาห์ที่ผ่านมาล่าสุด (จ-อา เดียว) — เฉพาะคนที่มีเครดิต > 0 ----------
+  // ---------- ช่วงวันที่ที่จะ Export: ถ้าเลือกวันที่เริ่ม-สิ้นสุดเองจะใช้ช่วงนั้น (รวมทั้งวันเริ่มและวันสิ้นสุด)
+  //            ถ้าเว้นว่างทั้งสองช่องจะใช้สัปดาห์ จ-อา ล่าสุดที่จบแล้วเหมือนเดิม ----------
+  const exportModal = document.getElementById("exportModal");
+  const exportMode = () => document.querySelector('input[name="exportMode"]:checked').value;
+  const isoLocal = (d) => d.toLocaleDateString("sv-SE"); // yyyy-mm-dd ตามวันที่ท้องถิ่นของ Date นั้น
+
+  function getExportRange() {
+    if (exportMode() === "week") {
+      const w = getLastCompletedWeekRange();
+      return { start: w.monday, end: w.sunday, custom: false };
+    }
+    const s = document.getElementById("exportStart").value;
+    const e = document.getElementById("exportEnd").value;
+    if (!s || !e) throw new Error("กรุณาเลือกวันที่เริ่มและวันที่สิ้นสุดให้ครบทั้งสองช่อง");
+    if (s > e) throw new Error("วันที่เริ่มต้องไม่อยู่หลังวันที่สิ้นสุด");
+    return { start: new Date(s + "T00:00:00"), end: new Date(e + "T00:00:00"), custom: true };
+  }
+
+  function updateExportHint() {
+    const el = document.getElementById("exportRangeHint");
+    try {
+      const r = getExportRange();
+      el.style.color = "var(--teal)";
+      el.textContent = `จะ Export: ${formatDate(r.start)} - ${formatDate(r.end)}`;
+    } catch (err) {
+      el.style.color = err.message.includes("ไม่อยู่หลัง") ? "var(--red)" : "var(--ink-dim)";
+      el.textContent = err.message;
+    }
+  }
+
+  function syncExportMode() {
+    const custom = exportMode() === "custom";
+    document.getElementById("exportCustomFields").classList.toggle("hidden", !custom);
+    document.getElementById("optWeek").classList.toggle("selected", !custom);
+    document.getElementById("optCustom").classList.toggle("selected", custom);
+    if (custom && !document.getElementById("exportStart").value && !document.getElementById("exportEnd").value) {
+      // ครั้งแรกที่สลับมาเลือกเอง ใส่สัปดาห์ล่าสุดไว้ให้เป็นค่าตั้งต้น แล้วค่อยปรับ
+      const w = getLastCompletedWeekRange();
+      document.getElementById("exportStart").value = isoLocal(w.monday);
+      document.getElementById("exportEnd").value = isoLocal(w.sunday);
+    }
+    updateExportHint();
+  }
+
+  function openExportModal() {
+    const w = getLastCompletedWeekRange();
+    document.getElementById("weekRangeText").textContent = `สัปดาห์ล่าสุดที่จบแล้ว: ${formatDate(w.monday)} - ${formatDate(w.sunday)}`;
+    syncExportMode();
+    exportModal.classList.remove("hidden");
+  }
+  function closeExportModal() { exportModal.classList.add("hidden"); }
+
+  document.querySelectorAll('input[name="exportMode"]').forEach(r => r.addEventListener("change", syncExportMode));
+  ["exportStart", "exportEnd"].forEach(id => document.getElementById(id).addEventListener("change", updateExportHint));
+  document.getElementById("exportCancelBtn").addEventListener("click", closeExportModal);
+  exportModal.addEventListener("click", (ev) => { if (ev.target === exportModal) closeExportModal(); });
+  document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && !exportModal.classList.contains("hidden")) closeExportModal(); });
+  document.getElementById("exportConfirmBtn").addEventListener("click", () => {
+    let range;
+    try { range = getExportRange(); }
+    catch (err) { updateExportHint(); return; } // ข้อความเตือนขึ้นที่ช่อง hint ในหน้าต่าง ไม่ปิดหน้าต่าง
+    closeExportModal();
+    runExport(range);
+  });
+
+  // ---------- Sheet 1: เครดิตของช่วงที่เลือก (หรือสัปดาห์ จ-อา ล่าสุด) — เฉพาะคนที่มีเครดิต > 0 ----------
   // ถ้าสัปดาห์นี้ยังไม่จบ (ยังไม่ถึงวันอาทิตย์) จะไม่แสดงสัปดาห์ปัจจุบัน แต่แสดงสัปดาห์ก่อนหน้าแทนเสมอ
-  function buildLastWeekSheet(nameMap) {
-    const { monday, sunday } = getLastCompletedWeekRange();
-    const rangeLabel = `${formatDate(monday)} - ${formatDate(sunday)}`;
-    const relevant = allPlayers.filter(p => p.date && isDateInRange(p.date, monday, sunday));
+  function buildLastWeekSheet(nameMap, range) {
+    const { start, end, custom } = range;
+    const rangeLabel = `${formatDate(start)} - ${formatDate(end)}`;
+    const relevant = allPlayers.filter(p => p.date && isDateInRange(p.date, start, end));
     if (!relevant.length) return null;
 
     const summary = aggregateCreditsByPerson(relevant, nameMap).filter(s => s.credits > 0);
     if (!summary.length) return null;
 
     return summary.map(s => ({
-      "สัปดาห์ (จ-อา)": rangeLabel,
+      [custom ? "ช่วงวันที่" : "สัปดาห์ (จ-อา)"]: rangeLabel,
       "SAP ID": s.id,
       "ชื่อ": s.name,
       "เครดิต": s.credits
@@ -931,13 +1049,13 @@
   // ---------- ดึงรายชื่อผู้เล่นสำหรับ export sheet "รายงานผล" — บังคับช่วงเวลาเป็นสัปดาห์ (จ-อา)
   //            เดียวกับ sheet "เครดิตรายสัปดาห์" เสมอ (ไม่พึ่งช่องเลือกวันที่บนหน้าจอ) ส่วน
   //            ตัวกรองสถานะ/คำค้นหาบนหน้าจอยังใช้แคบผลลัพธ์ต่อได้ตามปกติ ----------
-  function getWeeklyReportPlayers() {
-    const { monday, sunday } = getLastCompletedWeekRange();
+  function getWeeklyReportPlayers(range) {
+    const { start, end } = range;
     const filter = document.getElementById("statusFilter").value;
     const keyword = document.getElementById("searchInput").value.trim().toLowerCase();
     const sortBy = document.getElementById("sortSelect").value;
 
-    let list = allPlayers.filter(p => p.date && isDateInRange(p.date, monday, sunday));
+    let list = allPlayers.filter(p => p.date && isDateInRange(p.date, start, end));
     if (filter !== "all") list = list.filter(p => p.status === filter);
     if (keyword) {
       list = list.filter(p =>
@@ -952,10 +1070,12 @@
       if (sortBy === "id_desc") return String(b.playerId).localeCompare(String(a.playerId), undefined, { numeric: true });
       return 0;
     });
-    return { list, monday, sunday };
+    return { list };
   }
 
-  document.getElementById("exportBtn").addEventListener("click", async () => {
+  document.getElementById("exportBtn").addEventListener("click", openExportModal);
+
+  async function runExport(range) {
     const exportBtn = document.getElementById("exportBtn");
     const originalLabel = exportBtn.textContent;
     exportBtn.disabled = true;
@@ -963,7 +1083,7 @@
 
     try {
       const nameMap = await fetchNameLookupMap();
-      const { list: weeklyPlayers, monday, sunday } = getWeeklyReportPlayers();
+      const { list: weeklyPlayers } = getWeeklyReportPlayers(range);
 
       const rows = weeklyPlayers.map(p => ({
         "SAP ID": p.playerId,
@@ -984,13 +1104,13 @@
       const ws = XLSX.utils.json_to_sheet(rows);
       XLSX.utils.book_append_sheet(wb, ws, "รายงานผล");
 
-      const lastWeekRows = buildLastWeekSheet(nameMap);
+      const lastWeekRows = buildLastWeekSheet(nameMap, range);
       if (lastWeekRows && lastWeekRows.length) {
         const lastWeekWs = XLSX.utils.json_to_sheet(lastWeekRows);
         XLSX.utils.book_append_sheet(wb, lastWeekWs, "เครดิตรายสัปดาห์");
       }
 
-      const fileDateRange = `${toFileDateStr(monday)}-${toFileDateStr(sunday)}`;
+      const fileDateRange = `${toFileDateStr(range.start)}-${toFileDateStr(range.end)}`;
       XLSX.writeFile(wb, `checkpointhunter-${fileDateRange}.xlsx`);
 
       if (nameMap.size === 0) {
@@ -1002,7 +1122,7 @@
       exportBtn.disabled = false;
       exportBtn.textContent = originalLabel;
     }
-  });
+  }
 </script>
 </body>
 </html>
