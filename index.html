@@ -116,6 +116,13 @@
   .modal-actions{ display:flex; gap:10px; }
   .modal-actions button{ flex:1; padding:12px; font-size:15px; margin:0; }
   .btn-cancel{ background:#EEF1F5; color:var(--ink-dim); }
+
+  /* ---- แก้ไขข้อมูลผู้เล่น (ปุ่มในตาราง + หน้าต่างแก้ไข) ---- */
+  .row-edit-btn{ width:auto; padding:5px 9px; font-size:13px; border-radius:8px; background:var(--teal-dim); color:var(--teal); }
+  .modal-card.tall{ max-height:92vh; overflow-y:auto; }
+  .edit-info{ font-size:12.5px; color:var(--ink-dim); margin:-6px 0 14px; line-height:1.5; }
+  .edit-warn{ font-size:12px; font-weight:700; color:var(--amber); margin:0 0 12px; }
+  .conflict-warn{ background:#FBE1DD; color:var(--red); border-radius:12px; padding:10px 12px; font-size:12.5px; font-weight:700; line-height:1.5; margin:-8px 0 14px; }
 </style>
 </head>
 <body>
@@ -209,12 +216,40 @@
       <table>
         <thead>
           <tr>
-            <th>SAP ID</th><th>ชื่อ</th><th>สถานะ</th><th>ครั้งที่</th><th>CP</th><th>เครดิต</th><th>สุ่มพิกัด</th>
+            <th></th><th>SAP ID</th><th>ชื่อ</th><th>สถานะ</th><th>ครั้งที่</th><th>CP</th><th>เครดิต</th><th>สุ่มพิกัด</th>
             <th>วันที่</th><th>เริ่ม</th><th>สิ้นสุด</th><th>ใช้เวลา</th><th>แคปชั่น</th>
           </tr>
         </thead>
         <tbody id="tableBody"></tbody>
       </table>
+    </div>
+  </div>
+</div>
+
+<!-- หน้าต่างแก้ไขข้อมูลผู้เล่น (เปิดเมื่อกดปุ่ม ✏️ ในตารางรายงาน) -->
+<div id="editPlayerModal" class="modal-backdrop hidden">
+  <div class="modal-card tall" role="dialog" aria-modal="true" aria-labelledby="editPlayerTitle">
+    <div class="modal-title" id="editPlayerTitle">✏️ แก้ไขข้อมูลผู้เล่น</div>
+    <div class="edit-info" id="editPlayerInfo"></div>
+    <div class="edit-warn hidden" id="editPlayerWarn">⚠️ คนนี้กำลังเล่นอยู่ การแก้ตอนนี้อาจทับกับสิ่งที่เขากำลังทำ แนะนำให้แก้หลังเขาเล่นจบ</div>
+
+    <label for="editSapId">SAP ID</label>
+    <input id="editSapId" type="text" inputmode="numeric" autocomplete="off">
+    <div class="conflict-warn hidden" id="editConflictWarn"></div>
+
+    <label for="editName">ชื่อ</label>
+    <input id="editName" type="text" autocomplete="off">
+
+    <label for="editAttempts">จำนวนครั้งที่เล่นแล้ว (0 - 2)</label>
+    <input id="editAttempts" type="number" min="0" max="2" step="1" inputmode="numeric">
+
+    <label for="editCredits">เครดิต (ของวันที่เลือก)</label>
+    <input id="editCredits" type="number" min="0" max="99" step="1" inputmode="numeric">
+
+    <div class="msg error" id="editPlayerError" style="margin:0 0 12px;"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-cancel" id="editPlayerCancelBtn">ยกเลิก</button>
+      <button type="button" class="btn-primary" id="editPlayerSaveBtn">💾 บันทึก</button>
     </div>
   </div>
 </div>
@@ -719,7 +754,7 @@
   // ---------- REPORT TAB ----------
   function loadPlayers() {
     const tbody = document.getElementById("tableBody");
-    tbody.innerHTML = `<tr><td colspan="12">กำลังโหลด...</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="13">กำลังโหลด...</td></tr>`;
 
     const cbName = "jsonp_report_" + Math.random().toString(36).slice(2);
     const script = document.createElement("script");
@@ -727,7 +762,7 @@
       delete window[cbName];
       script.remove();
       if (!data.success) {
-        tbody.innerHTML = `<tr><td colspan="12">โหลดข้อมูลไม่สำเร็จ: ${data.error || ""}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="13">โหลดข้อมูลไม่สำเร็จ: ${data.error || ""}</td></tr>`;
         return;
       }
       allPlayers = data.players;
@@ -823,17 +858,21 @@
     return list;
   }
 
+  let renderedPlayers = []; // รายการที่แสดงอยู่ในตารางตอนนี้ (ใช้อ้างอิงตอนกดปุ่มแก้ไข)
+
   function renderTable() {
     const players = getFilteredPlayers();
     const tbody = document.getElementById("tableBody");
 
     if (!players.length) {
-      tbody.innerHTML = `<tr><td colspan="12">ไม่มีข้อมูลตามเงื่อนไขนี้</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="13">ไม่มีข้อมูลตามเงื่อนไขนี้</td></tr>`;
       return;
     }
 
-    tbody.innerHTML = players.map(p => `
+    renderedPlayers = players;
+    tbody.innerHTML = players.map((p, idx) => `
       <tr>
+        <td><button class="row-edit-btn" type="button" data-idx="${idx}" title="แก้ไขข้อมูลคนนี้">✏️</button></td>
         <td>${p.playerId}</td>
         <td>${p.name}</td>
         <td><span class="status-pill status-${p.status}">${STATUS_LABEL[p.status] || p.status}</span></td>
@@ -864,6 +903,121 @@
     refreshView();
   });
   document.getElementById("refreshBtn").addEventListener("click", loadPlayers);
+
+  // ---------- แก้ไขข้อมูลผู้เล่นรายคน (SAP ID / ชื่อ / จำนวนครั้ง / เครดิต) ----------
+  const editPlayerModal = document.getElementById("editPlayerModal");
+  const editErrEl = document.getElementById("editPlayerError");
+  let editTarget = null; // แถวผู้เล่นที่กำลังแก้ (ข้อมูลเดิมจาก server)
+
+  function openEditPlayerModal(p) {
+    editTarget = p;
+    document.getElementById("editPlayerInfo").textContent =
+      `รายการของ SAP ID ${p.playerId} · วันที่ ${formatDateSafe(p.date, p.startTime)} · สถานะ ${STATUS_LABEL[p.status] || p.status} (แก้เฉพาะแถวนี้)`;
+    document.getElementById("editSapId").value = p.playerId;
+    document.getElementById("editName").value = p.name;
+    document.getElementById("editAttempts").value = p.attemptCount;
+    document.getElementById("editCredits").value = p.creditsToday;
+    updateConflictWarning();
+    document.getElementById("editPlayerWarn").classList.toggle("hidden", p.status !== "playing");
+    editErrEl.style.display = "none";
+    editPlayerModal.classList.remove("hidden");
+  }
+  function closeEditPlayerModal() { editPlayerModal.classList.add("hidden"); editTarget = null; }
+
+  function showEditError(msg) { editErrEl.textContent = msg; editErrEl.style.display = "block"; }
+
+  // เตือนทันทีที่พิมพ์ SAP ID ใหม่ไปชนกับคนที่มีข้อมูลวันเดียวกันอยู่แล้ว (และกดบันทึกไม่ได้จนกว่าจะแก้)
+  function updateConflictWarning() {
+    const warnEl = document.getElementById("editConflictWarn");
+    const saveBtn = document.getElementById("editPlayerSaveBtn");
+    if (!editTarget) return;
+    const newId = document.getElementById("editSapId").value.trim();
+    const clash = newId && newId !== String(editTarget.playerId)
+      ? allPlayers.find(x => x !== editTarget && String(x.playerId) === newId && x.date === editTarget.date)
+      : null;
+    if (clash) {
+      warnEl.textContent = `⚠️ SAP ID ${newId} มีข้อมูลของวันที่ ${formatDateSafe(clash.date, clash.startTime)} อยู่แล้ว (ชื่อ ${clash.name}) เปลี่ยนไม่ได้ เพราะข้อมูลจะซ้อนกัน`;
+      warnEl.classList.remove("hidden");
+    } else {
+      warnEl.classList.add("hidden");
+    }
+    saveBtn.disabled = !!clash;
+  }
+  document.getElementById("editSapId").addEventListener("input", updateConflictWarning);
+
+  document.getElementById("tableBody").addEventListener("click", (ev) => {
+    const btn = ev.target.closest(".row-edit-btn");
+    if (!btn) return;
+    const p = renderedPlayers[Number(btn.dataset.idx)];
+    if (p) openEditPlayerModal(p);
+  });
+  document.getElementById("editPlayerCancelBtn").addEventListener("click", closeEditPlayerModal);
+  editPlayerModal.addEventListener("click", (ev) => { if (ev.target === editPlayerModal) closeEditPlayerModal(); });
+  document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && !editPlayerModal.classList.contains("hidden")) closeEditPlayerModal(); });
+
+  document.getElementById("editPlayerSaveBtn").addEventListener("click", async () => {
+    if (!editTarget) return;
+    const p = editTarget;
+    const newId = document.getElementById("editSapId").value.trim();
+    const name = document.getElementById("editName").value.trim();
+    const attemptsRaw = document.getElementById("editAttempts").value.trim();
+    const creditsRaw = document.getElementById("editCredits").value.trim();
+    editErrEl.style.display = "none";
+
+    const attempts = Number(attemptsRaw);
+    const credits = Number(creditsRaw);
+    if (!newId) return showEditError("กรุณากรอก SAP ID");
+    if (!name) return showEditError("กรุณากรอกชื่อ");
+    if (attemptsRaw === "" || !Number.isInteger(attempts) || attempts < 0 || attempts > 2) return showEditError("จำนวนครั้งต้องเป็นเลขจำนวนเต็ม 0 ถึง 2");
+    if (creditsRaw === "" || !Number.isInteger(credits) || credits < 0 || credits > 99) return showEditError("เครดิตต้องเป็นเลขจำนวนเต็ม 0 ถึง 99");
+
+    // สรุปสิ่งที่เปลี่ยนจริงๆ ให้ยืนยันก่อนบันทึก
+    const changes = [];
+    if (newId !== String(p.playerId)) changes.push(`SAP ID: ${p.playerId} → ${newId}`);
+    if (name !== p.name) changes.push(`ชื่อ: ${p.name} → ${name}`);
+    if (attempts !== Number(p.attemptCount)) changes.push(`จำนวนครั้ง: ${p.attemptCount} → ${attempts}`);
+    if (credits !== Number(p.creditsToday)) changes.push(`เครดิต: ${p.creditsToday} → ${credits}`);
+    if (!changes.length) return showEditError("ยังไม่มีอะไรเปลี่ยนแปลง");
+
+    if (!confirm("ยืนยันแก้ไขข้อมูล?\n\n" + changes.join("\n"))) return;
+
+    const saveBtn = document.getElementById("editPlayerSaveBtn");
+    saveBtn.disabled = true;
+    saveBtn.textContent = "กำลังบันทึก...";
+    try {
+      const fd = new FormData();
+      fd.append("action", "editPlayer");
+      fd.append("adminCode", ADMIN_CODE);
+      fd.append("playerId", p.playerId);
+      fd.append("date", p.date);
+      fd.append("newPlayerId", newId);
+      fd.append("name", name);
+      fd.append("attemptCount", String(attempts));
+      fd.append("creditsToday", String(credits));
+
+      const res = await fetch(API_URL, { method: "POST", body: fd, signal: AbortSignal.timeout(30000) });
+      const data = await res.json();
+      if (!data.success) {
+        const msg = data.busy ? "ระบบกำลังหนาแน่น ลองกดบันทึกอีกครั้ง" : (data.error || "บันทึกไม่สำเร็จ");
+        showEditError(msg);
+        if (data.conflict) alert("⚠️ " + msg);
+        return;
+      }
+      // บันทึกลงชีตแล้ว: อัปเดตแถวในตารางที่เปิดอยู่ให้ตรง (ไม่ต้องโหลดรายงานใหม่ทั้งหมด)
+      p.playerId = data.playerId;
+      p.name = data.name;
+      p.attemptCount = data.attemptCount;
+      p.creditsToday = data.creditsToday;
+      closeEditPlayerModal();
+      renderSummary();
+      renderTable();
+    } catch (e) {
+      showEditError("เชื่อมต่อไม่สำเร็จ: " + e.message);
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.textContent = "💾 บันทึก";
+    }
+  });
 
   // ---------- หา "วันจันทร์" ของสัปดาห์นั้น (Date object เที่ยงคืน) ----------
   // ---------- คืนค่า "วันนี้" ตามเวลาไทยจริง (Asia/Bangkok) ไม่ใช่ UTC ----------
